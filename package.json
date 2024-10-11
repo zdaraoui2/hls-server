@@ -6,6 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "clean-uploads": "rm -rf uploads/*",
+    "clean-hls": "rm -rf hls/*",
+    "clean": "npm run clean-uploads && npm run clean-hls",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

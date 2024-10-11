@@ -15,18 +15,37 @@ const PORT = process.env.PORT || 3000;
 
 // Set up multer for file uploads
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, 'uploads/'));
-  },
-  filename: function (req, file, cb) {
-    // Use a unique filename to prevent conflicts
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({ storage: storage });
-
+    destination: function (req, file, cb) {
+      cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+  // Use a unique filename to prevent conflicts
+      fs.readdir(uploadDir, (err, files) => {
+        if (err) {
+          return cb(err);
+        }
+  
+        // Filter files that match video-1, video-2 etc pattern
+        const videoFiles = files.filter(
+          (f) => f.startsWith('video-') && path.extname(f) === path.extname(file.originalname)
+        );
+  
+        // Extract numbers from filenames
+        const videoNumbers = videoFiles.map((f) => {
+          const match = f.match(/video-(\d+)/);
+          return match ? parseInt(match[1], 10) : 0;
+        });
+  
+        // Find the next available number
+        const nextNumber = videoNumbers.length > 0 ? Math.max(...videoNumbers) + 1 : 1;
+  
+        // Assign filename
+        cb(null, `video${nextNumber}${path.extname(file.originalname)}`);
+      });
+    },
+  });
+  
+  const upload = multer({ storage: storage });
 // Ensure upload and hls directories exist
 const uploadDir = path.join(__dirname, 'uploads');
 const hlsDir = path.join(__dirname, 'hls');
@@ -69,32 +88,35 @@ app.get('/videos', (req, res) => {
     res.json({ videos });
   });
 });
+
 function getVideoInfo(inputPath, callback) {
   // Get video resolution
   exec(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "${inputPath}"`, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`FFprobe error (video): ${stderr}`);
-      return callback(`FFprobe error: ${stderr}`, null);
+      if (error) {
+        console.error(`FFprobe error (video): ${stderr}`);
+        return callback(`FFprobe error: ${stderr}`, null);
+      }
+      const [width, height] = stdout.trim().split('x').map(Number);
+
+      // Get audio streams
+      exec(`ffprobe -v error -select_streams a -show_entries stream=index,codec_type,codec_name -of json "${inputPath}"`, (error2, stdout2, stderr2) => {
+          if (error2) {
+            console.error(`FFprobe error (audio): ${stderr2}`);
+            return callback(`FFprobe error: ${stderr2}`, null);
+          }
+          let audioInfo;
+          try {
+            audioInfo = JSON.parse(stdout2).streams;
+          } catch (parseError) {
+            console.error('Error parsing FFprobe audio output:', parseError);
+            return callback('Error parsing FFprobe audio output', null);
+          }
+
+          callback(null, { width, height, audioStreams: audioInfo });
+        }
+      );
     }
-    const [width, height] = stdout.trim().split('x').map(Number);
-
-    // Get audio streams
-    exec(`ffprobe -v error -select_streams a -show_entries stream=index,codec_type,codec_name -of json "${inputPath}"`, (error2, stdout2, stderr2) => {
-      if (error2) {
-        console.error(`FFprobe error (audio): ${stderr2}`);
-        return callback(`FFprobe error: ${stderr2}`, null);
-      }
-      let audioInfo;
-      try {
-        audioInfo = JSON.parse(stdout2).streams;
-      } catch (parseError) {
-        console.error('Error parsing FFprobe audio output:', parseError);
-        return callback('Error parsing FFprobe audio output', null);
-      }
-
-      callback(null, { width, height, audioStreams: audioInfo });
-    });
-  });
+  );
 }
 
 // Upload video
@@ -110,8 +132,8 @@ app.post('/upload', upload.single('video'), (req, res) => {
 
   fs.mkdirSync(outputDir, { recursive: true });
 
-   // Get video information
-   getVideoInfo(inputPath, (err, info) => {
+  // Get video information
+  getVideoInfo(inputPath, (err, info) => {
     if (err) {
       console.error('Error getting video info:', err);
       return res.status(500).send(`Error processing video: ${err}`);
@@ -121,10 +143,14 @@ app.post('/upload', upload.single('video'), (req, res) => {
 
     // Define desired resolutions
     const desiredResolutions = [
-      { label: '1080p', width: 1920, height: 1080, bitrate: '5000k', maxrate: '5350k', bufsize: '7500k' },
-      { label: '720p', width: 1280, height: 720, bitrate: '2800k', maxrate: '2996k', bufsize: '4200k' },
-      { label: '480p', width: 854, height: 480, bitrate: '1400k', maxrate: '1498k', bufsize: '2100k' },
-      { label: '360p', width: 640, height: 360, bitrate: '800k', maxrate: '856k', bufsize: '1200k' }
+      { label: '1080', width: 1920, height: 1080, bitrate: '5000k', maxrate: '5350k', bufsize: '7500k', bandwidth: 5000000,
+      },
+      { label: '720', width: 1280, height: 720, bitrate: '2800k', maxrate: '2996k', bufsize: '4200k', bandwidth: 2800000,
+      },
+      { label: '480', width: 854, height: 480, bitrate: '1400k', maxrate: '1498k', bufsize: '2100k', bandwidth: 1400000,
+      },
+      { label: '360', width: 640, height: 360, bitrate: '800k', maxrate: '856k', bufsize: '1200k', bandwidth: 800000,
+      },
     ];
 
     // Filter resolutions
@@ -144,28 +170,28 @@ app.post('/upload', upload.single('video'), (req, res) => {
 
     console.log(`Selected Audio Stream Index: ${selectedAudioStreamIndex} (Codec: ${selectedAudioStream.codec_name})`);
 
-    let filterComplex = '';
+    const filterComplexParts = [];
     availableResolutions.forEach((res, index) => {
-      filterComplex += `[0:v]scale=w=${res.width}:h=${res.height}[v${index}out]; `;
+      filterComplexParts.push(`[0:v]scale=w=${res.width}:h=${res.height}[v${index}]`);
     });
-    filterComplex = filterComplex.trim();
+    const filterComplex = filterComplexParts.join('; ');
 
-    if (filterComplex.endsWith(';')) {
-      filterComplex = filterComplex.slice(0, -1);
-    }
-
-    const varStreamMap = availableResolutions
-      .map((res, index) => `v:${index},a:${index}`)
-      .join(' ');
-
-    let mapOptions = '';
+    const perVariantOutputs = [];
     availableResolutions.forEach((res, index) => {
-      mapOptions += `-map "[v${index}out]" -c:v:${index} libx264 -b:v:${index} ${res.bitrate} -maxrate:v:${index} ${res.maxrate} -bufsize:v:${index} ${res.bufsize} `;
-      mapOptions += `-map 0:${selectedAudioStreamIndex} -c:a:${index} aac -b:a:${index} 128k `;
+      const qualityDir = path.join(outputDir, res.label);
+      fs.mkdirSync(qualityDir, { recursive: true });
+
+      const segmentFilename = `${qualityDir}/segment_%d_${res.label}.ts`;
+      
+      const playlistFilename = `${qualityDir}/index_${res.label}.m3u8`;
+
+      const outputOptions = `-map "[v${index}]" -map 0:${selectedAudioStreamIndex} -c:v libx264 -b:v ${res.bitrate} -maxrate ${res.maxrate} -bufsize ${res.bufsize} -c:a aac -b:a 128k -f hls -hls_time 10 -hls_playlist_type vod -hls_segment_filename "${segmentFilename}" "${playlistFilename}"`;
+
+      perVariantOutputs.push(outputOptions);
     });
 
     // Construct FFmpeg command
-    const ffmpegCommand = `ffmpeg -i "${inputPath}" -preset veryfast -g 48 -sc_threshold 0 -filter_complex "${filterComplex}" ${mapOptions} -var_stream_map "${varStreamMap}" -master_pl_name master.m3u8 -f hls -hls_time 10 -hls_playlist_type vod -hls_segment_filename "${outputDir}/v%v/fileSequence%d.ts" "${outputDir}/v%v/output.m3u8"`;
+    const ffmpegCommand = `ffmpeg -i "${inputPath}" -filter_complex "${filterComplex}" ${perVariantOutputs.join(' ')}`;
 
     console.log('Executing FFmpeg command:', ffmpegCommand);
 
@@ -179,15 +205,32 @@ app.post('/upload', upload.single('video'), (req, res) => {
       console.log(`FFmpeg output: ${stdout}`);
       console.error(`FFmpeg stderr: ${stderr}`);
 
-      // Check if master playlist was created
-      if (!fs.existsSync(masterPlaylistPath)) {
-        return res.status(500).send('Master playlist was not created.');
-      }
+      // Generate master playlist
+      generateMasterPlaylist(outputDir, availableResolutions, (err) => {
+        if (err) {
+          console.error('Error creating master playlist:', err);
+          return res.status(500).send('Error creating master playlist.');
+        }
 
-      res.send(`Video uploaded and processed successfully. Access it <a href="/player.html?video=${videoName}/master.m3u8">here</a>.`);
+        res.send(
+          `Video uploaded and processed successfully. Access it <a href="/player.html?video=${videoName}/master.m3u8">here</a>.`
+        );
+      });
     });
   });
 });
+
+// Function to generate the master playlist
+function generateMasterPlaylist(outputDir, availableResolutions, callback) {
+  let content = '#EXTM3U\n';
+
+  availableResolutions.forEach((res) => {
+    content += `#EXT-X-STREAM-INF:BANDWIDTH=${res.bandwidth},RESOLUTION=${res.width}x${res.height}\n`;
+    content += `${res.label}/index_${res.label}.m3u8\n`;
+  });
+
+  fs.writeFile(path.join(outputDir, 'master.m3u8'), content, callback);
+}
 
 // Start the server
 app.listen(PORT, () => {
