@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HLS Streaming Player</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f4; display: flex; flex-direction: column; align-items: center; padding-top: 50px; }
+        .container { background: #fff; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); width: 90%; max-width: 800px; }
+        video { width: 100%; border: 1px solid #ccc; }
+        .video-selector { margin-bottom: 20px; display: flex; align-items: center; }
+        .video-selector label { margin-right: 10px; }
+        .video-selector select { flex: 1; padding: 5px; }
+        .video-selector button { padding: 5px 10px; margin-left: 10px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+    <div class="container">
+        <h2>HLS Streaming Player</h2>
+        <div class="video-selector">
+            <label for="videoSelect">Select Video:</label>
+            <select id="videoSelect">
+                <option value="">-- Select a Video --</option>
+            </select>
+            <button onclick="loadVideo()">Load Video</button>
+        </div>
+        <video id="video" controls autoplay></video>
+    </div>
+
+    <script>
+        const videoSelect = document.getElementById('videoSelect');
+        const video = document.getElementById('video');
+
+        // Function to fetch available videos from /videos API
+        async function fetchVideos() {
+            try {
+                const response = await fetch('/videos');
+                const data = await response.json();
+                const videos = data.videos;
+
+                if (videos.length === 0) {
+                    const option = document.createElement('option');
+                    option.value = "";
+                    option.text = "No videos available";
+                    videoSelect.add(option);
+                    return;
+                }
+
+                videos.forEach(videoName => {
+                    const option = document.createElement('option');
+                    option.value = `/hls/${videoName}/output.m3u8`;
+                    option.text = videoName;
+                    videoSelect.add(option);
+                });
+            } catch (error) {
+                console.error('Error fetching videos:', error);
+                const option = document.createElement('option');
+                option.value = "";
+                option.text = "Error fetching videos";
+                videoSelect.add(option);
+            }
+        }
+
+        // Function to load selected video
+        function loadVideo() {
+            const selectedVideo = videoSelect.value;
+            if (!selectedVideo) {
+                alert('Please select a video.');
+                return;
+            }
+
+            if (Hls.isSupported()) {
+                const hls = new Hls();
+                hls.loadSource(selectedVideo);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.play();
+                });
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    console.error('HLS.js error:', data);
+                });
+            }
+            else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = selectedVideo;
+                video.addEventListener('loadedmetadata', function() {
+                    video.play();
+                });
+            }
+            else {
+                console.error('This browser does not support HLS.');
+            }
+        }
+
+        // Fetch videos from hls directory
+        fetchVideos();
+    </script>
+</body>
+</html>

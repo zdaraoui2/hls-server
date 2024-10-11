@@ -1,0 +1,18 @@
+# Node.js dependencies
+node_modules/
+
+# Editor directories and files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Mac system files
+.DS_Store
+
+# Uploads and generated HLS segments
+uploads/
+hls/
+
+# Environment variables
+.env
