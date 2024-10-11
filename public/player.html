@@ -47,7 +47,7 @@
 
                 videos.forEach(videoName => {
                     const option = document.createElement('option');
-                    option.value = `/hls/${videoName}/output.m3u8`;
+                    option.value = `/hls/${videoName}/master.m3u8`;
                     option.text = videoName;
                     videoSelect.add(option);
                 });
